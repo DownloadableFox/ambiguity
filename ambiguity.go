@@ -64,3 +64,7 @@ func (a *Ambiguity) Start() error {
 
 	return nil
 }
+
+func (a *Ambiguity) Client() *discordgo.Session {
+	return a.client
+}
