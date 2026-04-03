@@ -7,6 +7,7 @@ import (
 )
 
 type Module interface {
+	Configure(*discordgo.Session) error
 	Events() ([]EventStack, error)
 	Tasks() ([]TaskStack, error)
 	Commands() ([]CommandStack, error)
@@ -14,6 +15,7 @@ type Module interface {
 
 type ModuleManager interface {
 	RegisterModules(module ...Module) error
+	OnConfigure(client *discordgo.Session) error
 	OnEvents(client *discordgo.Session, manager EventManager) error
 	OnCommands(client *discordgo.Session, manager CommandManager) error
 	OnTasks(client *discordgo.Session, manager TaskManager) error
@@ -34,8 +36,17 @@ func (m *ModuleManagerImpl) RegisterModules(module ...Module) error {
 	return nil
 }
 
+func (m *ModuleManagerImpl) OnConfigure(client *discordgo.Session) error {
+	for _, module := range m.Modules {
+		if err := module.Configure(client); err != nil {
+			return fmt.Errorf("failed to configure module %T: %w", module, err)
+		}
+	}
+
+	return nil
+}
+
 func (m *ModuleManagerImpl) OnEvents(client *discordgo.Session, manager EventManager) error {
-	// Register events
 	for _, module := range m.Modules {
 		events, err := module.Events()
 		if err != nil {
@@ -49,7 +60,6 @@ func (m *ModuleManagerImpl) OnEvents(client *discordgo.Session, manager EventMan
 		}
 	}
 
-	// Publish events
 	if err := manager.PublishEvents(client); err != nil {
 		return fmt.Errorf("failed to publish events: %w", err)
 	}
@@ -58,7 +68,6 @@ func (m *ModuleManagerImpl) OnEvents(client *discordgo.Session, manager EventMan
 }
 
 func (m *ModuleManagerImpl) OnCommands(client *discordgo.Session, manager CommandManager) error {
-	// Register commands
 	for _, module := range m.Modules {
 		commands, err := module.Commands()
 		if err != nil {
@@ -72,7 +81,6 @@ func (m *ModuleManagerImpl) OnCommands(client *discordgo.Session, manager Comman
 		}
 	}
 
-	// Publish commands
 	if err := manager.PublishCommands(client); err != nil {
 		return fmt.Errorf("failed to publish commands: %w", err)
 	}
@@ -81,7 +89,6 @@ func (m *ModuleManagerImpl) OnCommands(client *discordgo.Session, manager Comman
 }
 
 func (m *ModuleManagerImpl) OnTasks(client *discordgo.Session, manager TaskManager) error {
-	// Register tasks
 	for _, module := range m.Modules {
 		tasks, err := module.Tasks()
 		if err != nil {
@@ -95,7 +102,6 @@ func (m *ModuleManagerImpl) OnTasks(client *discordgo.Session, manager TaskManag
 		}
 	}
 
-	// Publish tasks
 	if err := manager.PublishTasks(client); err != nil {
 		return fmt.Errorf("failed to publish tasks: %w", err)
 	}

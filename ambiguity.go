@@ -42,22 +42,23 @@ func New(token string, options ...AmbiguityOption) (*Ambiguity, error) {
 }
 
 func (a *Ambiguity) Start() error {
+	if err := a.modulesManager.OnConfigure(a.client); err != nil {
+		return fmt.Errorf("configure modules: %w", err)
+	}
+
 	if err := a.modulesManager.OnEvents(a.client, a.eventsManager); err != nil {
 		return fmt.Errorf("register events: %w", err)
 	}
 
-	// Run the bot until terminated
 	if err := a.client.Open(); err != nil {
 		return fmt.Errorf("connect to discord: %w", err)
 	}
 	defer a.client.Close()
 
-	// Register commands
 	if err := a.modulesManager.OnCommands(a.client, a.commandsManager); err != nil {
 		return fmt.Errorf("register commands: %w", err)
 	}
 
-	// Register tasks
 	if err := a.modulesManager.OnTasks(a.client, a.tasksManager); err != nil {
 		return fmt.Errorf("register tasks: %w", err)
 	}
