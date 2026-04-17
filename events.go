@@ -2,113 +2,88 @@ package ambiguity
 
 import (
 	"context"
-	"errors"
+	"log/slog"
 
 	"github.com/bwmarrin/discordgo"
 )
 
-type EventExecuteFunc[T any] func(c context.Context, s *discordgo.Session, e *T) error
-type EventMiddlewareFunc[T any] func(event Event[T], next EventExecuteFunc[T]) EventExecuteFunc[T]
-
-type EventStack struct {
-	Data    EventData
-	Execute any
+type EventContext[T any] struct {
+	context.Context
+	Session *discordgo.Session
+	Event   *T
 }
 
-type EventData struct {
+func NewEventContext[T any](session *discordgo.Session, event *T) *EventContext[T] {
+	return &EventContext[T]{
+		Context: context.Background(),
+		Session: session,
+		Event:   event,
+	}
+}
+
+type EventExecuteFunc[T any] func(context *EventContext[T]) error
+type EventMiddlewareFunc[T any] func(event Event[T], next EventExecuteFunc[T]) EventExecuteFunc[T]
+
+type EventInfo struct {
 	Name string
 	Once bool
 }
 
 type Event[T any] interface {
-	Data() EventData
-	Execute(c context.Context, s *discordgo.Session, e *T) error
+	Info() EventInfo
+	Handle(context *EventContext[T]) error
 }
 
 type EventMiddleware[T any] interface {
 	Handle(event Event[T], next EventExecuteFunc[T]) EventExecuteFunc[T]
 }
 
-type EventManager interface {
-	PublishEvents(session *discordgo.Session) error
-	RegisterStack(event EventStack) error
+type CompilableEvent interface {
+	Compile(session *discordgo.Session, log *slog.Logger) any
 }
 
-type EventManagerImpl struct {
-	events map[string]EventStack
+type LinkedEvent[T any] struct {
+	Event       Event[T]
+	Middlewares []EventMiddleware[T]
 }
 
-func NewEventManager() *EventManagerImpl {
-	return &EventManagerImpl{
-		events: make(map[string]EventStack),
+func LinkEvent[T any](event Event[T], middlewares ...EventMiddleware[T]) LinkedEvent[T] {
+	return LinkedEvent[T]{
+		Event:       event,
+		Middlewares: middlewares,
 	}
 }
 
-func (em *EventManagerImpl) PublishEvents(session *discordgo.Session) error {
-	// Wait for all events to be published
-	for _, stack := range em.events {
-		data := stack.Data
-		execute := stack.Execute
-
-		// Register the event handler with the session
-		if data.Once {
-			session.AddHandlerOnce(execute)
-		} else {
-			session.AddHandler(execute)
-		}
-	}
-
-	return nil
+func (l *LinkedEvent[T]) Info() EventInfo {
+	return l.Event.Info()
 }
 
-func (em *EventManagerImpl) RegisterStack(stack EventStack) error {
-	data := stack.Data
-
-	// Register the event
-	if _, exists := em.events[data.Name]; exists {
-		return errors.New("event already registered")
-	} else {
-		em.events[data.Name] = stack
+func (l *LinkedEvent[T]) Handle() EventExecuteFunc[T] {
+	next := func(ctx *EventContext[T]) error {
+		return l.Event.Handle(ctx)
 	}
 
-	return nil
+	for i := len(l.Middlewares) - 1; i >= 0; i-- {
+		mw := l.Middlewares[i]
+		next = mw.Handle(l.Event, next)
+	}
+
+	return next
 }
 
-func CompileEvent[T any](event Event[T], middlewares ...EventMiddleware[T]) EventStack {
-	data := event.Data()
+func (l *LinkedEvent[T]) Compile(session *discordgo.Session, log *slog.Logger) any {
+	handle := l.Handle()
 
-	next := func(c context.Context, s *discordgo.Session, e *T) error {
-		return event.Execute(c, s, e)
-	}
-
-	// Execute the middleware in reverse order
-	// to ensure the first middleware is executed last
-	for i := len(middlewares) - 1; i >= 0; i-- {
-		mw := middlewares[i]
-		next = mw.Handle(event, next)
-	}
-
-	return EventStack{
-		Data:    data,
-		Execute: WrapEvent(next),
-	}
-}
-
-// Helper function that translates generic events into interfaces for discordgo
-func WrapEvent[T any](fn EventExecuteFunc[T]) interface{} {
 	return func(s *discordgo.Session, e *T) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				// stacktrace := make([]byte, 4096)
-				// count := runtime.Stack(stacktrace, false)
-
-				// log.Error().Any("panic", rec).Msg("Recovered from fatal error while executing event!")
-				// log.Debug().Msg("Stack trace: \n" + string(stacktrace[:count]))
+				log.Error("Recovered from panic in event execution", slog.Any("panic", rec))
 			}
 		}()
 
-		if err := fn(context.Background(), s, e); err != nil {
-			// log.Error().Err(err).Msg("Error executing event not handled!")
+		context := NewEventContext[T](session, e)
+		if err := handle(context); err != nil {
+			log.Error("Unhandled error in event execution", slog.Any("error", err))
 		}
 	}
 }
